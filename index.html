@@ -14,7 +14,7 @@
       </div>
       <nav class="tabs" role="tablist">
         <button class="tab active" data-tab="browse" role="tab">Browse</button>
-        <button class="tab" data-tab="seed" role="tab">Seed</button>
+        <button class="tab" data-tab="draw" role="tab">Draw</button>
       </nav>
       <div class="search" id="search-wrap">
         <input
@@ -44,6 +44,12 @@
       </aside>
 
       <section class="content">
+        <button
+          id="back-to-draw"
+          class="back-pill"
+          hidden
+          title="Return to the draw you came from"
+        >&larr; Back to draw</button>
         <div class="breadcrumb" id="breadcrumb"></div>
         <div class="list-header" id="list-header"></div>
         <div id="motif-list" class="motif-list"></div>
@@ -56,26 +62,26 @@
       </aside>
     </main>
 
-    <main class="seed-view" id="seed-view" hidden>
-      <div class="seed-toolbar">
-        <button id="generate-btn" class="primary-btn">Generate seed</button>
+    <main class="draw-view" id="draw-view" hidden>
+      <div class="draw-toolbar">
+        <button id="new-draw-btn" class="primary-btn">New draw</button>
         <label class="count-field">
-          Motifs:
+          Cards:
           <input
-            id="seed-count"
+            id="draw-count"
             type="number"
             min="1"
             max="12"
             value="5"
           />
         </label>
-        <span class="seed-id" id="seed-id"></span>
+        <span class="draw-id" id="draw-id"></span>
       </div>
 
-      <section class="seed-body" id="seed-body">
-        <div class="seed-empty">
-          Press <strong>Generate seed</strong> to roll a random set of motifs
-          as the bones of a tale.
+      <section class="draw-body" id="draw-body">
+        <div class="draw-empty">
+          Press <strong>New draw</strong> to deal a hand of motifs &mdash;
+          the bones of a tale.
         </div>
       </section>
     </main>

@@ -29,11 +29,12 @@ const els = {
   loading: document.getElementById("loading"),
   detail: document.getElementById("detail-panel"),
   browseView: document.getElementById("browse-view"),
-  seedView: document.getElementById("seed-view"),
-  seedBody: document.getElementById("seed-body"),
-  seedId: document.getElementById("seed-id"),
-  seedCount: document.getElementById("seed-count"),
-  generateBtn: document.getElementById("generate-btn"),
+  drawView: document.getElementById("draw-view"),
+  drawBody: document.getElementById("draw-body"),
+  drawId: document.getElementById("draw-id"),
+  drawCount: document.getElementById("draw-count"),
+  newDrawBtn: document.getElementById("new-draw-btn"),
+  backToDraw: document.getElementById("back-to-draw"),
   tabs: document.querySelectorAll(".tab"),
 };
 
@@ -77,7 +78,8 @@ async function init() {
 
   els.search.addEventListener("input", debounce(onSearch, 150));
   els.regionFilter.addEventListener("change", onRegionChange);
-  els.generateBtn.addEventListener("click", () => generateAndRenderSeed());
+  els.newDrawBtn.addEventListener("click", () => generateAndRenderDraw());
+  els.backToDraw.addEventListener("click", returnToDraw);
   for (const tab of els.tabs) {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
   }
@@ -86,7 +88,7 @@ async function init() {
   await selectChapter("A");
   showLoading(false);
 
-  // Deep-link via hash: #seed=<id>  or  #tab=seed
+  // Deep-link via hash: #draw=<id>  or  #tab=draw
   onHashChange();
 }
 
@@ -94,13 +96,15 @@ async function init() {
 
 function switchTab(name) {
   for (const t of els.tabs) t.classList.toggle("active", t.dataset.tab === name);
-  const isSeed = name === "seed";
-  els.browseView.hidden = isSeed;
-  els.seedView.hidden = !isSeed;
-  els.searchWrap.style.visibility = isSeed ? "hidden" : "visible";
-  if (isSeed && !state.currentSeed) {
-    // auto-roll the first seed so the user sees something
-    generateAndRenderSeed();
+  const isDraw = name === "draw";
+  els.browseView.hidden = isDraw;
+  els.drawView.hidden = !isDraw;
+  els.searchWrap.style.visibility = isDraw ? "hidden" : "visible";
+  if (isDraw) {
+    // If we're going back to the draw, clear the back-pill
+    els.backToDraw.hidden = true;
+    state.drawReturnHash = null;
+    if (!state.currentDraw) generateAndRenderDraw();
   }
   updateHash();
 }
@@ -109,23 +113,23 @@ function onHashChange() {
   const hash = location.hash.replace(/^#/, "");
   if (!hash) return;
   const params = new URLSearchParams(hash);
-  if (params.get("tab") === "seed") switchTab("seed");
-  const seedParam = params.get("seed");
-  if (seedParam) {
-    const seed = decodeSeed(seedParam);
-    if (seed) {
-      state.currentSeed = seed;
-      renderSeed(seed);
-      switchTab("seed");
+  if (params.get("tab") === "draw") switchTab("draw");
+  const drawParam = params.get("draw");
+  if (drawParam) {
+    const draw = decodeDraw(drawParam);
+    if (draw) {
+      state.currentDraw = draw;
+      renderDraw(draw);
+      switchTab("draw");
     }
   }
 }
 
 function updateHash() {
   const params = new URLSearchParams();
-  const isSeed = !els.seedView.hidden;
-  if (isSeed) params.set("tab", "seed");
-  if (isSeed && state.currentSeed) params.set("seed", encodeSeed(state.currentSeed));
+  const isDraw = !els.drawView.hidden;
+  if (isDraw) params.set("tab", "draw");
+  if (isDraw && state.currentDraw) params.set("draw", encodeDraw(state.currentDraw));
   const str = params.toString();
   const newHash = str ? "#" + str : "";
   if (location.hash !== newHash) {
@@ -461,42 +465,43 @@ function detailSection(title, body) {
   return `<div class="detail-section"><h3>${escapeHTML(title)}</h3>${body}</div>`;
 }
 
-/* ---------- seed generation ----------
+/* ---------- draw generation ----------
  *
- * A seed is a plain object the renderer can consume regardless of where it
- * came from. When ATU data arrives, `generateSeed({ source: "atu" })` just
- * fills in `tale_type` and marks its motifs as role "core" — the rest of
- * the pipeline (rendering, permalinks, rerolls) is unchanged.
+ * A "draw" is a plain object the renderer consumes regardless of its
+ * source. When ATU data arrives, `generateDraw({ source: "atu" })`
+ * fills in `tale_type` and tags the tale's motifs with role "core" —
+ * the pipeline (rendering, permalinks, replacement) is unchanged.
  *
  *   {
- *     id:        string,                       // short id for permalinks
+ *     id:        string,                       // permalink id
  *     source:    "random" | "atu",
  *     tale_type: null | { atu_id, title, summary },
- *     motifs:    [ { role: "core"|"flavor", motif_id: string } ]
+ *     motifs:    [ { role: "core"|"extra", motif_id: string } ]
  *   }
+ *
+ * `role` is carried but not displayed. It becomes meaningful only
+ * when a draw mixes tale-type motifs with additional ones.
  */
 
-async function generateSeed(options = {}) {
+async function generateDraw(options = {}) {
   const source = options.source || "random";
   const count = Math.max(1, Math.min(12, options.count || 5));
 
   if (source === "atu") {
-    // Placeholder for ATU integration. When the ATU data is loaded,
-    // this branch will:
+    // Placeholder until ATU data lands:
     //   1. pick a random ATU tale type
-    //   2. seed motifs with role="core" from type.motifs
-    //   3. top up with role="flavor" motifs to reach `count`
+    //   2. add its motifs as role="core"
+    //   3. top up with role="extra" motifs to reach `count`
     throw new Error("ATU source not wired up yet");
   }
 
-  // Random: pick from the in-memory search index (loaded at boot)
   const pool = state.searchIndex;
   const picks = sampleWithoutReplacement(pool, count);
   return {
     id: randomId(),
     source: "random",
     tale_type: null,
-    motifs: picks.map((m) => ({ role: "flavor", motif_id: m.i })),
+    motifs: picks.map((m) => ({ role: "extra", motif_id: m.i })),
   };
 }
 
@@ -517,20 +522,19 @@ function randomId() {
   return Math.random().toString(36).slice(2, 8);
 }
 
-async function generateAndRenderSeed() {
-  const count = parseInt(els.seedCount.value, 10) || 5;
-  const seed = await generateSeed({ source: "random", count });
-  state.currentSeed = seed;
-  renderSeed(seed);
+async function generateAndRenderDraw() {
+  const count = parseInt(els.drawCount.value, 10) || 5;
+  const draw = await generateDraw({ source: "random", count });
+  state.currentDraw = draw;
+  renderDraw(draw);
   updateHash();
 }
 
-async function renderSeed(seed) {
-  els.seedId.textContent = `seed ${seed.id}`;
+async function renderDraw(draw) {
+  els.drawId.textContent = `draw ${draw.id}`;
 
-  // Fetch full motif objects for all entries (loads chapter shards as needed)
   const resolved = await Promise.all(
-    seed.motifs.map(async (entry) => ({
+    draw.motifs.map(async (entry) => ({
       role: entry.role,
       motif: await getMotifById(entry.motif_id),
     })),
@@ -538,76 +542,112 @@ async function renderSeed(seed) {
 
   const parts = [];
 
-  if (seed.tale_type) {
-    // Rendered when an ATU tale type drives the seed
+  if (draw.tale_type) {
     parts.push(`
       <div class="tale-type-card">
-        <div class="eyebrow">ATU ${escapeHTML(seed.tale_type.atu_id)}</div>
-        <h3>${escapeHTML(seed.tale_type.title || "")}</h3>
-        ${seed.tale_type.summary ? `<p>${escapeHTML(seed.tale_type.summary)}</p>` : ""}
+        <div class="eyebrow">ATU ${escapeHTML(draw.tale_type.atu_id)}</div>
+        <h3>${escapeHTML(draw.tale_type.title || "")}</h3>
+        ${draw.tale_type.summary ? `<p>${escapeHTML(draw.tale_type.summary)}</p>` : ""}
       </div>
     `);
   }
 
-  parts.push('<div class="seed-motifs">');
-  for (const { role, motif } of resolved) {
+  parts.push('<div class="draw-motifs">');
+  for (const { motif } of resolved) {
     if (!motif) continue;
-    parts.push(renderMotifCard(motif, role));
+    parts.push(renderMotifCard(motif));
   }
   parts.push("</div>");
 
-  els.seedBody.innerHTML = parts.join("");
+  els.drawBody.innerHTML = parts.join("");
 
-  // Wire up card actions
-  for (const btn of els.seedBody.querySelectorAll("[data-action]")) {
-    const id = btn.dataset.motifId;
-    const action = btn.dataset.action;
-    btn.addEventListener("click", async () => {
-      if (action === "reroll") rerollSlot(id);
-      else if (action === "open") openInBrowse(id);
+  // Wire up card interactions
+  for (const card of els.drawBody.querySelectorAll(".motif-card")) {
+    card.addEventListener("click", (e) => {
+      // Ignore clicks on inner buttons/links — they have their own handlers
+      if (e.target.closest("[data-action], .card-open-link, a, button")) return;
+      toggleCard(card);
+    });
+  }
+  for (const btn of els.drawBody.querySelectorAll('[data-action="reroll"]')) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      replaceCard(btn.dataset.motifId);
+    });
+  }
+  for (const link of els.drawBody.querySelectorAll('[data-action="open"]')) {
+    link.addEventListener("click", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      openInBrowse(link.dataset.motifId);
     });
   }
 }
 
-function renderMotifCard(m, role) {
-  const path = [m.division1, m.division2, m.division3, m.section]
-    .filter(Boolean)
-    .map(escapeHTML)
-    .join(" &rsaquo; ");
-  const regions = (m.cultural_region || []).slice(0, 3);
+function renderMotifCard(m) {
+  const chapterShort = (m.chapter || "").replace(/\.$/, "");
+  const sectionShort = (m.section || "").replace(/\.$/, "");
+  const context = [chapterShort, sectionShort].filter(Boolean).join(" · ");
   return `
-    <article class="motif-card">
+    <article class="motif-card" data-motif-id="${escapeAttr(m.motif_id)}">
       <div class="card-head">
         <span class="id">${escapeHTML(m.motif_id || "—")}</span>
-        <span class="role-badge ${role}">${escapeHTML(role)}</span>
+        <button class="reroll-btn" data-action="reroll" data-motif-id="${escapeAttr(m.motif_id)}" title="Replace this card">&#x21bb;</button>
       </div>
       <h4>${escapeHTML(m.name || "—")}</h4>
-      <div class="path">${path}</div>
-      ${
-        regions.length
-          ? `<div class="card-regions">${regions
-              .map((r) => `<span class="chip region">${escapeHTML(r)}</span>`)
-              .join("")}</div>`
-          : ""
-      }
-      <div class="card-footer">
-        <div class="card-actions">
-          <button class="icon-btn" data-action="reroll" data-motif-id="${escapeAttr(m.motif_id)}" title="Replace this motif with a new random one">reroll</button>
-          <button class="icon-btn" data-action="open" data-motif-id="${escapeAttr(m.motif_id)}" title="Open in Browse">open</button>
-        </div>
-        <span>${escapeHTML((m.chapter || "").replace(/\.$/, ""))}</span>
-      </div>
+      <div class="card-context">${escapeHTML(context)}</div>
+      ${renderCardExpanded(m)}
     </article>
   `;
 }
 
-function rerollSlot(motifId) {
-  const seed = state.currentSeed;
-  if (!seed) return;
-  const idx = seed.motifs.findIndex((e) => e.motif_id === motifId);
+function renderCardExpanded(m) {
+  const parts = ['<div class="card-expanded" hidden>'];
+
+  if (m.additional_description) {
+    parts.push(`<div><span class="exp-label">Description</span><p>${escapeHTML(m.additional_description)}</p></div>`);
+  }
+  if (m.bibliographies) {
+    parts.push(`<div><span class="exp-label">Bibliography</span><p>${escapeHTML(m.bibliographies)}</p></div>`);
+  }
+  if (m.cross_references && m.cross_references.length) {
+    const links = m.cross_references
+      .map((x) => `<span class="chip">${escapeHTML(x)}</span>`)
+      .join("");
+    parts.push(`<div><span class="exp-label">See also</span><div class="chips">${links}</div></div>`);
+  }
+  if (m.cultural_region && m.cultural_region.length) {
+    const chips = m.cultural_region
+      .map((r) => `<span class="chip region">${escapeHTML(r)}</span>`)
+      .join("");
+    parts.push(`<div><span class="exp-label">Regions</span><div class="chips">${chips}</div></div>`);
+  }
+  if (m.lemmas && m.lemmas.length) {
+    const chips = m.lemmas
+      .map((l) => `<span class="chip">${escapeHTML(l)}</span>`)
+      .join("");
+    parts.push(`<div><span class="exp-label">Lemmas</span><div class="chips">${chips}</div></div>`);
+  }
+
+  parts.push(`<a href="#" class="card-open-link" data-action="open" data-motif-id="${escapeAttr(m.motif_id)}">Open in Browse &rsaquo;</a>`);
+  parts.push("</div>");
+  return parts.join("");
+}
+
+function toggleCard(card) {
+  const expanded = card.querySelector(".card-expanded");
+  if (!expanded) return;
+  const isOpen = !expanded.hidden;
+  expanded.hidden = isOpen;
+  card.classList.toggle("expanded", !isOpen);
+}
+
+function replaceCard(motifId) {
+  const draw = state.currentDraw;
+  if (!draw) return;
+  const idx = draw.motifs.findIndex((e) => e.motif_id === motifId);
   if (idx < 0) return;
-  // Pick a replacement not already in the seed
-  const existing = new Set(seed.motifs.map((e) => e.motif_id));
+  const existing = new Set(draw.motifs.map((e) => e.motif_id));
   let replacement;
   for (let i = 0; i < 50; i++) {
     const cand = state.searchIndex[Math.floor(Math.random() * state.searchIndex.length)];
@@ -617,28 +657,44 @@ function rerollSlot(motifId) {
     }
   }
   if (!replacement) return;
-  seed.motifs[idx] = { role: seed.motifs[idx].role, motif_id: replacement.i };
-  seed.id = randomId(); // seed changed, new id
-  renderSeed(seed);
+  draw.motifs[idx] = { role: draw.motifs[idx].role, motif_id: replacement.i };
+  draw.id = randomId();
+  renderDraw(draw);
   updateHash();
 }
 
 function openInBrowse(motifId) {
+  // Remember where we came from so we can offer a back pill
+  if (state.currentDraw) {
+    state.drawReturnHash = "tab=draw&draw=" + encodeDraw(state.currentDraw);
+    els.backToDraw.hidden = false;
+  }
   switchTab("browse");
   showDetail(motifId);
 }
 
-/* ---------- seed permalink encoding ----------
- * Compact URL-safe form: "<source>:<id>:<motif_ids_comma_separated>"
- * Good enough for v1; revisit once ATU adds tale_type.
- */
-
-function encodeSeed(seed) {
-  const ids = seed.motifs.map((e) => (e.role === "core" ? "*" : "") + e.motif_id);
-  return [seed.source, seed.id, ids.join(",")].join(":");
+function returnToDraw() {
+  if (!state.drawReturnHash) {
+    switchTab("draw");
+    return;
+  }
+  // Restore the original draw via the hash
+  location.hash = "#" + state.drawReturnHash;
+  els.backToDraw.hidden = true;
+  state.drawReturnHash = null;
 }
 
-function decodeSeed(str) {
+/* ---------- draw permalink encoding ----------
+ * Compact URL-safe form: "<source>:<id>:<motif_ids_comma_separated>"
+ * Motifs with role "core" are prefixed with "*".
+ */
+
+function encodeDraw(draw) {
+  const ids = draw.motifs.map((e) => (e.role === "core" ? "*" : "") + e.motif_id);
+  return [draw.source, draw.id, ids.join(",")].join(":");
+}
+
+function decodeDraw(str) {
   const parts = str.split(":");
   if (parts.length < 3) return null;
   const [source, id, idsStr] = parts;
@@ -647,7 +703,7 @@ function decodeSeed(str) {
     .filter(Boolean)
     .map((tok) => {
       if (tok.startsWith("*")) return { role: "core", motif_id: tok.slice(1) };
-      return { role: "flavor", motif_id: tok };
+      return { role: "extra", motif_id: tok };
     });
   return { id, source, tale_type: null, motifs };
 }
