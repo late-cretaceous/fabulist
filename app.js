@@ -34,6 +34,7 @@ const els = {
   drawId: document.getElementById("draw-id"),
   drawCount: document.getElementById("draw-count"),
   newDrawBtn: document.getElementById("new-draw-btn"),
+  copyDrawBtn: document.getElementById("copy-draw-btn"),
   backToDraw: document.getElementById("back-to-draw"),
   tabs: document.querySelectorAll(".tab"),
 };
@@ -79,6 +80,7 @@ async function init() {
   els.search.addEventListener("input", debounce(onSearch, 150));
   els.regionFilter.addEventListener("change", onRegionChange);
   els.newDrawBtn.addEventListener("click", () => generateAndRenderDraw());
+  els.copyDrawBtn.addEventListener("click", copyDrawToClipboard);
   els.backToDraw.addEventListener("click", returnToDraw);
   for (const tab of els.tabs) {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
@@ -682,6 +684,57 @@ function returnToDraw() {
   location.hash = "#" + state.drawReturnHash;
   els.backToDraw.hidden = true;
   state.drawReturnHash = null;
+}
+
+async function copyDrawToClipboard() {
+  const draw = state.currentDraw;
+  if (!draw) return;
+
+  const lines = [];
+  if (draw.tale_type) {
+    lines.push(`ATU ${draw.tale_type.atu_id}: ${draw.tale_type.title}`);
+    if (draw.tale_type.summary) lines.push(draw.tale_type.summary);
+    lines.push("");
+  }
+  for (const entry of draw.motifs) {
+    const m = state.detailCache.get(entry.motif_id);
+    const name = m?.name || "(unknown)";
+    lines.push(`- ${entry.motif_id} — ${name}`);
+  }
+  const text = lines.join("\n");
+
+  try {
+    await navigator.clipboard.writeText(text);
+    flashCopyConfirmed();
+  } catch (err) {
+    console.error("Copy failed:", err);
+    // Fallback: select a hidden textarea and exec copy
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      flashCopyConfirmed();
+    } catch {
+      alert("Could not copy. Here's the text:\n\n" + text);
+    }
+    ta.remove();
+  }
+}
+
+function flashCopyConfirmed() {
+  const btn = els.copyDrawBtn;
+  const originalText = btn.textContent;
+  btn.textContent = "Copied!";
+  btn.classList.add("is-confirmed");
+  clearTimeout(state.copyTimeout);
+  state.copyTimeout = setTimeout(() => {
+    btn.textContent = originalText;
+    btn.classList.remove("is-confirmed");
+  }, 1400);
 }
 
 /* ---------- draw permalink encoding ----------
