@@ -65,7 +65,6 @@
     <main class="draw-view" id="draw-view" hidden>
       <div class="draw-toolbar">
         <button id="new-draw-btn" class="primary-btn">Draw</button>
-        <button id="copy-draw-btn" class="secondary-btn" title="Copy motif list as text">Copy</button>
         <label class="count-field">
           Cards:
           <input
@@ -77,6 +76,20 @@
           />
         </label>
         <span class="draw-id" id="draw-id"></span>
+        <button
+          id="copy-draw-btn"
+          class="icon-btn-bare"
+          title="Copy motif list as text"
+          aria-label="Copy motif list"
+        >
+          <svg class="icon icon-copy" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="2"/>
+            <path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/>
+          </svg>
+          <svg class="icon icon-check" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="4 10 8 14 16 6"/>
+          </svg>
+        </button>
       </div>
 
       <section class="draw-body" id="draw-body">

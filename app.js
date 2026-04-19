@@ -727,12 +727,9 @@ async function copyDrawToClipboard() {
 
 function flashCopyConfirmed() {
   const btn = els.copyDrawBtn;
-  const originalText = btn.textContent;
-  btn.textContent = "Copied!";
   btn.classList.add("is-confirmed");
   clearTimeout(state.copyTimeout);
   state.copyTimeout = setTimeout(() => {
-    btn.textContent = originalText;
     btn.classList.remove("is-confirmed");
   }, 1400);
 }

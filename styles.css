@@ -471,26 +471,40 @@ select {
   background: #70461f;
 }
 
-.secondary-btn {
-  padding: 8px 16px;
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 13px;
-  font-weight: 500;
+.icon-btn-bare {
+  padding: 6px;
+  color: var(--text-muted);
+  border-radius: 4px;
+  line-height: 0;
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
-.secondary-btn:hover {
-  border-color: var(--accent);
+.icon-btn-bare:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.icon-btn-bare .icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.icon-btn-bare .icon-check {
+  display: none;
   color: var(--accent);
 }
 
-.secondary-btn.is-confirmed {
-  border-color: var(--accent);
-  color: var(--accent);
+.icon-btn-bare.is-confirmed .icon-copy {
+  display: none;
+}
+
+.icon-btn-bare.is-confirmed .icon-check {
+  display: block;
+}
+
+.icon-btn-bare.is-confirmed {
   background: var(--accent-soft);
 }
 
