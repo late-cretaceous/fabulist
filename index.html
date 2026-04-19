@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thompson Motif Index Browser</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <h1>Motif Browser</h1>
+        <span class="subtitle">Thompson's Motif-Index of Folk-Literature</span>
+      </div>
+      <div class="search">
+        <input
+          id="search-input"
+          type="search"
+          placeholder="Search 49,204 motifs by id, name, lemma, or region&hellip;"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <span id="search-count" class="search-count"></span>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <aside class="sidebar">
+        <div class="sidebar-section">
+          <h2>Chapters</h2>
+          <ul id="chapter-list" class="chapter-list"></ul>
+        </div>
+        <div class="sidebar-section">
+          <h2>Filter by region</h2>
+          <select id="region-filter">
+            <option value="">All regions</option>
+          </select>
+        </div>
+        <div class="sidebar-section meta" id="meta-block"></div>
+      </aside>
+
+      <section class="content">
+        <div class="breadcrumb" id="breadcrumb"></div>
+        <div class="list-header" id="list-header"></div>
+        <div id="motif-list" class="motif-list"></div>
+        <div id="list-empty" class="empty" hidden>No motifs match.</div>
+        <div id="loading" class="loading" hidden>Loading&hellip;</div>
+      </section>
+
+      <aside class="detail" id="detail-panel">
+        <div class="detail-placeholder">Pick a motif to see its details.</div>
+      </aside>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
