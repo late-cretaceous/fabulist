@@ -740,4 +740,8 @@ select {
     align-items: stretch;
     gap: 10px;
   }
+  /* Don't let the tabs container stretch to the full row width */
+  .tabs {
+    align-self: flex-start;
+  }
 }
