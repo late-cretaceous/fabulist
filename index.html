@@ -20,7 +20,7 @@
         <input
           id="search-input"
           type="search"
-          placeholder="Search id, name, lemma, region&hellip;"
+          placeholder="Search motifs and tales&hellip;"
           autocomplete="off"
           spellcheck="false"
         />
@@ -31,8 +31,12 @@
     <main class="app-main" id="browse-view">
       <aside class="sidebar">
         <div class="sidebar-section">
-          <h2>Chapters</h2>
-          <ul id="chapter-list" class="chapter-list"></ul>
+          <h2>Chapters <span class="dim">(motifs)</span></h2>
+          <ul id="chapter-list" class="nav-list"></ul>
+        </div>
+        <div class="sidebar-section">
+          <h2>Tale types <span class="dim">(ATU)</span></h2>
+          <ul id="tale-cat-list" class="nav-list"></ul>
         </div>
         <div class="sidebar-section">
           <h2>Filter by region</h2>

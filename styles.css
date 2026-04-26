@@ -137,17 +137,17 @@ select {
   margin: 0 0 8px;
 }
 
-.chapter-list {
+.nav-list {
   list-style: none;
   padding: 0;
   margin: 0;
 }
 
-.chapter-list li {
+.nav-list li {
   margin-bottom: 2px;
 }
 
-.chapter-btn {
+.nav-btn {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -158,29 +158,43 @@ select {
   color: var(--text);
 }
 
-.chapter-btn:hover {
+.nav-btn:hover {
   background: var(--surface-muted);
 }
 
-.chapter-btn.active {
+.nav-btn.active {
   background: var(--accent-soft);
   color: var(--accent);
 }
 
-.chapter-btn .letter {
+.nav-btn .letter {
   font-weight: 700;
   min-width: 18px;
   color: var(--accent);
 }
 
-.chapter-btn .count {
+.nav-btn .title {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-btn .count {
   margin-left: auto;
   font-size: 11px;
   color: var(--text-muted);
 }
 
-.chapter-btn.active .count {
+.nav-btn.active .count {
   color: var(--accent);
+}
+
+.sidebar h2 .dim {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  margin-left: 4px;
+  font-size: 10px;
 }
 
 #region-filter {
@@ -408,6 +422,16 @@ select {
 
 .xref-btn:hover {
   background: var(--accent-soft);
+}
+
+.exemplar-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+
+.exemplar-list li {
+  margin-bottom: 4px;
 }
 
 /* Tabs */

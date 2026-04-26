@@ -9,10 +9,19 @@ const state = {
   searchIndex: [],
   chapterCache: new Map(),
   detailCache: new Map(),
-  view: { mode: "chapter", chapter: "A", query: "", region: "" },
+  taleCategories: [],
+  tales: [],
+  taleById: new Map(),
+  view: {
+    mode: "chapter",
+    chapter: "A",
+    taleCategory: null,
+    query: "",
+    region: "",
+  },
   rendered: 0,
   results: [],
-  selectedId: null,
+  selected: null, // { type: "motif"|"tale", id: string }
 };
 
 const els = {
@@ -28,6 +37,7 @@ const els = {
   empty: document.getElementById("list-empty"),
   loading: document.getElementById("loading"),
   detail: document.getElementById("detail-panel"),
+  taleCatList: document.getElementById("tale-cat-list"),
   browseView: document.getElementById("browse-view"),
   drawView: document.getElementById("draw-view"),
   drawBody: document.getElementById("draw-body"),
@@ -68,13 +78,23 @@ async function getMotifById(id) {
 async function init() {
   showLoading(true);
   const meta = await loadJSON("data/metadata.json");
-  state.metadata = meta.metadata;
-  state.chapters = meta.chapters;
+  state.metadata = meta.motifs.metadata;
+  state.chapters = meta.motifs.chapters;
+  state.taleCategories = meta.atu.categories;
+  state.atuMetadata = meta.atu.metadata;
 
   renderChapterList();
+  renderTaleCategoryList();
   renderMeta();
 
-  state.searchIndex = await loadJSON("data/search.json");
+  // Search index and ATU tales — both feed unified search
+  const [searchIndex, atu] = await Promise.all([
+    loadJSON("data/search.json"),
+    loadJSON("data/atu.json"),
+  ]);
+  state.searchIndex = searchIndex;
+  state.tales = atu.tales;
+  for (const t of atu.tales) state.taleById.set(t.atu_id, t);
   populateRegionFilter();
 
   els.search.addEventListener("input", debounce(onSearch, 150));
@@ -150,8 +170,9 @@ function renderChapterList() {
   for (const ch of state.chapters) {
     const li = document.createElement("li");
     const btn = document.createElement("button");
-    btn.className = "chapter-btn";
-    btn.dataset.letter = ch.letter;
+    btn.className = "nav-btn";
+    btn.dataset.kind = "chapter";
+    btn.dataset.value = ch.letter;
     btn.innerHTML = `
       <span class="letter">${ch.letter}</span>
       <span class="title">${escapeHTML(trimChapterTitle(ch.title))}</span>
@@ -162,6 +183,23 @@ function renderChapterList() {
   }
 }
 
+function renderTaleCategoryList() {
+  els.taleCatList.innerHTML = "";
+  for (const cat of state.taleCategories) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.className = "nav-btn";
+    btn.dataset.kind = "tale-cat";
+    btn.dataset.value = cat.name;
+    btn.innerHTML = `
+      <span class="title">${escapeHTML(cat.name)}</span>
+      <span class="count">${cat.count.toLocaleString()}</span>`;
+    btn.addEventListener("click", () => selectTaleCategory(cat.name));
+    li.appendChild(btn);
+    els.taleCatList.appendChild(li);
+  }
+}
+
 function trimChapterTitle(t) {
   return t.replace(/^[A-Z]\.\s*/, "").replace(/\.$/, "");
 }
@@ -169,11 +207,13 @@ function trimChapterTitle(t) {
 function renderMeta() {
   const m = state.metadata;
   if (!m) return;
+  const taleCount = state.atuMetadata?.total_tales || 0;
   els.metaBlock.innerHTML = `
     <strong>${m.total_motifs.toLocaleString()}</strong> motifs
     across <strong>${m.chapters}</strong> chapters.<br/>
-    <em>${escapeHTML(m.source_edition || "")}</em><br/>
-    Database v${escapeHTML(m.database_version || "")}.
+    <strong>${taleCount.toLocaleString()}</strong> ATU tale types
+    across <strong>${state.taleCategories.length}</strong> categories.<br/>
+    <em>${escapeHTML(m.source_edition || "")}</em>
   `;
 }
 
@@ -196,26 +236,60 @@ function populateRegionFilter() {
 /* ---------- view switching ---------- */
 
 async function selectChapter(letter) {
-  state.view = { mode: "chapter", chapter: letter, query: "", region: state.view.region };
+  state.view = {
+    mode: "chapter",
+    chapter: letter,
+    taleCategory: null,
+    query: "",
+    region: state.view.region,
+  };
   els.search.value = "";
-  highlightChapterButton(letter);
+  highlightSidebar();
   await renderList();
 }
 
-function highlightChapterButton(letter) {
-  for (const b of els.chapterList.querySelectorAll(".chapter-btn")) {
-    b.classList.toggle("active", b.dataset.letter === letter);
+async function selectTaleCategory(name) {
+  state.view = {
+    mode: "tale-category",
+    chapter: null,
+    taleCategory: name,
+    query: "",
+    region: state.view.region,
+  };
+  els.search.value = "";
+  highlightSidebar();
+  await renderList();
+}
+
+function highlightSidebar() {
+  const v = state.view;
+  const inSearch = v.mode === "search";
+  for (const b of document.querySelectorAll(".sidebar .nav-btn")) {
+    let active = false;
+    if (!inSearch) {
+      if (b.dataset.kind === "chapter") active = b.dataset.value === v.chapter;
+      else if (b.dataset.kind === "tale-cat") active = b.dataset.value === v.taleCategory;
+    }
+    b.classList.toggle("active", active);
   }
 }
 
 function onSearch(e) {
   const q = e.target.value.trim();
   if (!q && state.view.mode === "search") {
-    selectChapter(state.view.chapter || "A");
+    // Returning from search — restore the previous browse mode
+    if (state.view.taleCategory) selectTaleCategory(state.view.taleCategory);
+    else selectChapter(state.view.chapter || "A");
     return;
   }
-  state.view = { mode: "search", chapter: state.view.chapter, query: q, region: state.view.region };
-  highlightChapterButton(null);
+  state.view = {
+    mode: "search",
+    chapter: state.view.chapter,
+    taleCategory: state.view.taleCategory,
+    query: q,
+    region: state.view.region,
+  };
+  highlightSidebar();
   renderList();
 }
 
@@ -230,27 +304,39 @@ async function renderList() {
   els.motifList.innerHTML = "";
   els.empty.hidden = true;
 
-  let results;
-  if (state.view.mode === "search") {
-    results = runSearch(state.view.query, state.view.region);
-  } else {
-    const motifs = await getChapter(state.view.chapter);
-    results = motifs;
-    if (state.view.region) {
-      results = results.filter((m) =>
-        (m.cultural_region || []).includes(state.view.region),
+  let results = [];
+  const v = state.view;
+
+  if (v.mode === "search") {
+    results = runSearch(v.query, v.region);
+  } else if (v.mode === "chapter") {
+    const motifs = await getChapter(v.chapter);
+    let filtered = motifs;
+    if (v.region) {
+      filtered = filtered.filter((m) =>
+        (m.cultural_region || []).includes(v.region),
       );
     }
-    results = results.map((m) => ({
+    results = filtered.map((m) => ({
+      type: "motif",
       i: m.motif_id,
       n: m.name,
-      c: state.view.chapter,
+      c: v.chapter,
       s: m.section,
       l: m.lemmas || [],
       r: m.cultural_region || [],
-      _level: m.level,
     }));
-    results.sort(sortBySortKey);
+    results.sort((a, b) => a.i.localeCompare(b.i, "en"));
+  } else if (v.mode === "tale-category") {
+    const tales = state.tales.filter((t) => t.category === v.taleCategory);
+    results = tales.map((t) => ({
+      type: "tale",
+      i: t.atu_id,
+      n: t.title,
+      c: t.category,
+      s: t.subsection,
+    }));
+    results.sort(sortByTaleId);
   }
 
   state.results = results;
@@ -268,8 +354,12 @@ async function renderList() {
   renderNextPage();
 }
 
-function sortBySortKey(a, b) {
-  // Fall back to id lex order — our search index has no sort_key, but id is close enough
+// ATU ids are mostly numeric ("1", "923", "1725") with occasional
+// letter suffixes ("910K", "1453K"). Sort by leading number, then suffix.
+function sortByTaleId(a, b) {
+  const an = parseInt(a.i, 10);
+  const bn = parseInt(b.i, 10);
+  if (an !== bn) return an - bn;
   return a.i.localeCompare(b.i, "en");
 }
 
@@ -278,16 +368,23 @@ function updateBreadcrumb() {
   const parts = [];
   if (v.mode === "search") {
     parts.push(`<strong>Search:</strong> "${escapeHTML(v.query)}"`);
-  } else {
+  } else if (v.mode === "chapter") {
     const ch = state.chapters.find((c) => c.letter === v.chapter);
     if (ch) parts.push(`<strong>${ch.letter}.</strong> ${escapeHTML(trimChapterTitle(ch.title))}`);
+  } else if (v.mode === "tale-category") {
+    parts.push(`<strong>Tale types:</strong> ${escapeHTML(v.taleCategory)}`);
   }
   if (v.region) parts.push(`region: ${escapeHTML(v.region)}`);
   els.breadcrumb.innerHTML = parts.join(" &middot; ");
 }
 
 function updateListHeader(total) {
-  els.listHeader.innerHTML = `<span>${total.toLocaleString()} motifs</span>`;
+  let label = "results";
+  const v = state.view;
+  if (v.mode === "chapter") label = total === 1 ? "motif" : "motifs";
+  else if (v.mode === "tale-category") label = total === 1 ? "tale" : "tales";
+  else label = total === 1 ? "match" : "matches";
+  els.listHeader.innerHTML = `<span>${total.toLocaleString()} ${label}</span>`;
 }
 
 function updateSearchCount(total) {
@@ -304,23 +401,37 @@ function renderNextPage() {
   const frag = document.createDocumentFragment();
   const q = state.view.mode === "search" ? state.view.query.toLowerCase() : "";
 
-  for (const m of slice) {
+  for (const item of slice) {
     const row = document.createElement("div");
     row.className = "motif-row";
-    row.dataset.id = m.i;
-    if (m.i === state.selectedId) row.classList.add("selected");
+    row.dataset.type = item.type;
+    row.dataset.id = item.i;
+    if (
+      state.selected &&
+      state.selected.type === item.type &&
+      state.selected.id === item.i
+    ) {
+      row.classList.add("selected");
+    }
 
-    const tags = [];
-    if (m.r && m.r.length) tags.push(...m.r.slice(0, 2));
+    let tags = [];
+    let idDisplay = escapeHTML(item.i || "—");
+    if (item.type === "tale") {
+      idDisplay = `ATU ${idDisplay}`;
+      if (item.s) tags = [item.s];
+      else if (item.c) tags = [item.c];
+    } else {
+      if (item.r && item.r.length) tags = item.r.slice(0, 2);
+    }
 
     row.innerHTML = `
-      <div class="id">${escapeHTML(m.i || "—")}</div>
-      <div class="name">${highlight(m.n, q)}</div>
+      <div class="id">${idDisplay}</div>
+      <div class="name">${highlight(item.n, q)}</div>
       <div class="tags">${tags
         .map((t) => `<span class="tag">${escapeHTML(t)}</span>`)
         .join("")}</div>
     `;
-    row.addEventListener("click", () => showDetail(m.i, row));
+    row.addEventListener("click", () => showDetail(item.i, row, item.type));
     frag.appendChild(row);
   }
 
@@ -347,22 +458,42 @@ function runSearch(query, region) {
   const tokens = q.split(/\s+/).filter(Boolean);
   if (!tokens.length && !region) return [];
 
-  const out = [];
+  const motifResults = [];
   for (const m of state.searchIndex) {
     if (region && !m.r.includes(region)) continue;
     if (tokens.length) {
       const hay = (m.i + " " + m.n + " " + m.l.join(" ") + " " + m.r.join(" ")).toLowerCase();
-      let ok = true;
-      for (const t of tokens) {
-        if (!hay.includes(t)) { ok = false; break; }
-      }
-      if (!ok) continue;
+      if (!tokens.every((t) => hay.includes(t))) continue;
     }
-    out.push(m);
-    if (out.length > 5000) break;
+    motifResults.push({ ...m, type: "motif" });
+    if (motifResults.length > 5000) break;
   }
-  out.sort((a, b) => {
-    // Prefer id prefix match
+
+  // Tales don't carry region data — region filter excludes them entirely.
+  const taleResults = [];
+  if (!region && tokens.length) {
+    for (const t of state.tales) {
+      const hay = (
+        t.atu_id + " " +
+        t.title + " " +
+        t.category + " " +
+        t.subsection + " " +
+        (t.notes || "") + " " +
+        t.exemplars.join(" ")
+      ).toLowerCase();
+      if (!tokens.every((tk) => hay.includes(tk))) continue;
+      taleResults.push({
+        type: "tale",
+        i: t.atu_id,
+        n: t.title,
+        c: t.category,
+        s: t.subsection,
+      });
+    }
+    taleResults.sort(sortByTaleId);
+  }
+
+  motifResults.sort((a, b) => {
     if (tokens.length) {
       const t0 = tokens[0];
       const ai = a.i.toLowerCase().startsWith(t0) ? 0 : 1;
@@ -371,19 +502,33 @@ function runSearch(query, region) {
     }
     return a.i.localeCompare(b.i, "en");
   });
-  return out;
+
+  // Tales first (smaller, more "newsworthy"), then motifs.
+  return [...taleResults, ...motifResults];
 }
 
 /* ---------- detail view ---------- */
 
-async function showDetail(id, rowEl) {
-  state.selectedId = id;
+async function showDetail(id, rowEl, type = "motif") {
+  state.selected = { type, id };
   for (const r of els.motifList.querySelectorAll(".motif-row")) {
-    r.classList.toggle("selected", r.dataset.id === id);
+    r.classList.toggle(
+      "selected",
+      r.dataset.type === type && r.dataset.id === id,
+    );
   }
   if (rowEl) rowEl.scrollIntoView({ block: "nearest" });
 
   els.detail.innerHTML = `<div class="detail-placeholder">Loading&hellip;</div>`;
+  if (type === "tale") {
+    const t = state.taleById.get(id);
+    if (!t) {
+      els.detail.innerHTML = `<div class="detail-placeholder">Tale ATU ${escapeHTML(id)} not found.</div>`;
+      return;
+    }
+    renderTaleDetail(t);
+    return;
+  }
   const m = await getMotifById(id);
   if (!m) {
     els.detail.innerHTML = `<div class="detail-placeholder">Motif ${escapeHTML(id)} not found.</div>`;
@@ -465,6 +610,35 @@ function renderDetail(m) {
 
 function detailSection(title, body) {
   return `<div class="detail-section"><h3>${escapeHTML(title)}</h3>${body}</div>`;
+}
+
+function renderTaleDetail(t) {
+  const sections = [];
+
+  sections.push(`
+    <div>
+      <span class="motif-id">ATU ${escapeHTML(t.atu_id)}</span>
+      <h2>${escapeHTML(t.title)}</h2>
+      <div class="path">
+        ${escapeHTML(t.category)}${t.subsection ? " &rarr; " + escapeHTML(t.subsection) : ""}
+      </div>
+    </div>
+  `);
+
+  if (t.notes) {
+    sections.push(detailSection("Notes", `<p>${escapeHTML(t.notes)}</p>`));
+  }
+
+  if (t.exemplars && t.exemplars.length) {
+    const items = t.exemplars
+      .map((e) => `<li>${escapeHTML(e)}</li>`)
+      .join("");
+    sections.push(
+      detailSection("Exemplar tales", `<ul class="exemplar-list">${items}</ul>`),
+    );
+  }
+
+  els.detail.innerHTML = sections.join("");
 }
 
 /* ---------- draw generation ----------
