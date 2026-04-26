@@ -96,6 +96,15 @@ async function init() {
   state.tales = atu.tales;
   for (const t of atu.tales) state.taleById.set(t.atu_id, t);
 
+  // Indexes for draw sampling: chapter -> motifs and motif_id -> motif
+  state.motifsByChapter = new Map();
+  state.motifSearchById = new Map();
+  for (const m of state.searchIndex) {
+    if (!state.motifsByChapter.has(m.c)) state.motifsByChapter.set(m.c, []);
+    state.motifsByChapter.get(m.c).push(m);
+    state.motifSearchById.set(m.i, m);
+  }
+
   // Pool of tales eligible for random draws. Excludes "parent type"
   // entries — ATU integer numbers whose concrete content lives in
   // lettered subtypes (e.g. ATU 425 is the parent for 425A, 425B,
@@ -667,27 +676,88 @@ function renderTaleDetail(t) {
  * when/if a draw mixes core (tale-type-defined) motifs with extras.
  */
 
-// ATU category -> Thompson chapter letters that are thematically aligned.
-// When a draw picks an ATU type, motifs are sampled from these chapters.
-const ATU_TO_CHAPTERS = {
-  "Animal Tales": ["B", "K", "J"],
-  "Tales of Magic": ["D", "F", "G", "H", "E"],
-  "Religious Tales": ["V", "Q", "L"],
-  "Realistic Tales": ["P", "T", "N", "W"],
-  "Stupid Ogre": ["G", "J"],
-  "Anecdotes and Jokes": ["X", "J"],
-  "Formula Tales": ["Z"],
+// Per-ATU-category weighted preference for Thompson chapters.
+// Mapped chapters get the listed weight; unmapped chapters fall back
+// to BASE_WEIGHT, so they can still surface — the mapping biases
+// draws toward thematic chapters without restricting them entirely.
+//
+// When sampling N motifs, each pick reduces its chapter's weight by
+// ANTI_CLUSTER_FACTOR. This yields cross-chapter variety even within
+// a single thematic category (no more "5 fool motifs in a row").
+const BASE_WEIGHT = 0.3;
+const ANTI_CLUSTER_FACTOR = 0.4;
+
+const CHAPTER_WEIGHTS = {
+  "Animal Tales": { B: 4, K: 3, J: 2.5, X: 1.5, A: 1 },
+  "Tales of Magic": { D: 4, F: 3, G: 3, H: 3, E: 2.5, T: 2, Q: 1.5, A: 1 },
+  "Religious Tales": { V: 4, Q: 3, L: 2.5, M: 2, P: 2, A: 1.5 },
+  "Realistic Tales": { P: 3.5, T: 3, N: 3, W: 2.5, J: 2, K: 2, U: 1.5 },
+  "Stupid Ogre": { G: 4, J: 3, K: 3, X: 2, S: 1.5 },
+  "Anecdotes and Jokes": { X: 4, J: 3, K: 2.5, W: 2.5, T: 2, V: 2, P: 1.5 },
+  "Formula Tales": { Z: 4, B: 2, X: 1.5 },
 };
 
-function chaptersForCategory(category) {
-  return ATU_TO_CHAPTERS[category] || [];
+/**
+ * Pick `count` motifs for a draw, weighted by category and avoiding
+ * chapter clustering. `existing` is an array of lean motif entries
+ * (with .c chapter letter) already in the draw — their chapters
+ * pre-load the anti-cluster multiplier so replacements respect what's
+ * already on the table.
+ */
+function pickMotifsForDraw(category, count, existing = []) {
+  const weights = CHAPTER_WEIGHTS[category] || {};
+  const allChapters = [...state.motifsByChapter.keys()];
+  const used = new Set(existing.map((m) => m.i));
+  const mult = new Map();
+  for (const m of existing) {
+    mult.set(m.c, (mult.get(m.c) ?? 1) * ANTI_CLUSTER_FACTOR);
+  }
+
+  const picks = [];
+  for (let i = 0; i < count; i++) {
+    const pick = pickOneWeightedMotif(allChapters, weights, mult, used);
+    if (!pick) break;
+    picks.push(pick);
+    used.add(pick.i);
+    mult.set(pick.c, (mult.get(pick.c) ?? 1) * ANTI_CLUSTER_FACTOR);
+  }
+  return picks;
 }
 
-function motifPoolForCategory(category) {
-  const letters = chaptersForCategory(category);
-  if (!letters.length) return state.searchIndex;
-  const set = new Set(letters);
-  return state.searchIndex.filter((m) => set.has(m.c));
+function pickOneWeightedMotif(allChapters, weights, mult, used) {
+  // Build the chapter-level weight distribution, skipping exhausted ones
+  const distribution = [];
+  let total = 0;
+  for (const ch of allChapters) {
+    const baseW = weights[ch] ?? BASE_WEIGHT;
+    const m = mult.get(ch) ?? 1;
+    const w = baseW * m;
+    if (w <= 0) continue;
+    const motifs = state.motifsByChapter.get(ch);
+    // Cheap exhaustion check: only fully bail if every motif is used,
+    // which is virtually impossible at our sizes
+    if (motifs.length <= used.size && motifs.every((mm) => used.has(mm.i))) continue;
+    distribution.push({ ch, w });
+    total += w;
+  }
+  if (total <= 0) return null;
+
+  // Weighted random chapter
+  let r = Math.random() * total;
+  let chosenCh = distribution[distribution.length - 1].ch;
+  for (const { ch, w } of distribution) {
+    r -= w;
+    if (r <= 0) { chosenCh = ch; break; }
+  }
+
+  // Random unused motif within that chapter (sampling with retry)
+  const motifs = state.motifsByChapter.get(chosenCh);
+  for (let tries = 0; tries < 50; tries++) {
+    const m = motifs[Math.floor(Math.random() * motifs.length)];
+    if (!used.has(m.i)) return m;
+  }
+  // Fallback: linear scan if random sampling kept hitting used entries
+  return motifs.find((m) => !used.has(m.i)) || null;
 }
 
 function isParentType(t) {
@@ -707,9 +777,8 @@ async function generateDraw(options = {}) {
   // Pick a random tale type from the eligible pool (excludes parents)
   const tale = talePool[Math.floor(Math.random() * talePool.length)];
 
-  // Sample motifs from chapters mapped to the tale's category
-  const motifPool = motifPoolForCategory(tale.category);
-  const picks = sampleWithoutReplacement(motifPool, count);
+  // Sample motifs weighted by category, with anti-clustering
+  const picks = pickMotifsForDraw(tale.category, count);
 
   return {
     id: randomId(),
@@ -724,19 +793,6 @@ async function generateDraw(options = {}) {
     },
     motifs: picks.map((m) => ({ role: "extra", motif_id: m.i })),
   };
-}
-
-function sampleWithoutReplacement(arr, n) {
-  const used = new Set();
-  const out = [];
-  const max = Math.min(n, arr.length);
-  while (out.length < max) {
-    const i = Math.floor(Math.random() * arr.length);
-    if (used.has(i)) continue;
-    used.add(i);
-    out.push(arr[i]);
-  }
-  return out;
 }
 
 function randomId() {
@@ -878,20 +934,17 @@ function replaceCard(motifId) {
   const idx = draw.motifs.findIndex((e) => e.motif_id === motifId);
   if (idx < 0) return;
 
-  // Keep replacements within the same category-mapped chapter pool so
-  // the draw stays thematically coherent.
-  const pool = draw.tale_type
-    ? motifPoolForCategory(draw.tale_type.category)
-    : state.searchIndex;
-  const existing = new Set(draw.motifs.map((e) => e.motif_id));
-  let replacement;
-  for (let i = 0; i < 50; i++) {
-    const cand = pool[Math.floor(Math.random() * pool.length)];
-    if (cand && !existing.has(cand.i)) {
-      replacement = cand;
-      break;
-    }
-  }
+  // Anti-cluster against the OTHER motifs currently in the draw
+  const others = draw.motifs
+    .filter((_, i) => i !== idx)
+    .map((e) => state.motifSearchById.get(e.motif_id))
+    .filter(Boolean);
+
+  const [replacement] = pickMotifsForDraw(
+    draw.tale_type?.category || null,
+    1,
+    others,
+  );
   if (!replacement) return;
   draw.motifs[idx] = { role: draw.motifs[idx].role, motif_id: replacement.i };
   draw.id = randomId();
