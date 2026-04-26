@@ -95,6 +95,13 @@ async function init() {
   state.searchIndex = searchIndex;
   state.tales = atu.tales;
   for (const t of atu.tales) state.taleById.set(t.atu_id, t);
+
+  // Pool of tales eligible for random draws. Excludes "parent type"
+  // entries — ATU integer numbers whose concrete content lives in
+  // lettered subtypes (e.g. ATU 425 is the parent for 425A, 425B,
+  // 425C; the bare 425 is a section header, not a story prompt).
+  state.drawPool = state.tales.filter((t) => !isParentType(t));
+
   populateRegionFilter();
 
   els.search.addEventListener("input", debounce(onSearch, 150));
@@ -683,19 +690,26 @@ function motifPoolForCategory(category) {
   return state.searchIndex.filter((m) => set.has(m.c));
 }
 
+function isParentType(t) {
+  const title = (t.title || "").toLowerCase();
+  const notes = (t.notes || "").toLowerCase();
+  return title.includes("parent type") || notes.includes("parent type");
+}
+
 async function generateDraw(options = {}) {
   const count = Math.max(1, Math.min(12, options.count || 5));
 
-  if (!state.tales.length) {
+  const talePool = state.drawPool || [];
+  if (!talePool.length) {
     throw new Error("ATU data not loaded yet");
   }
 
-  // Pick a random tale type
-  const tale = state.tales[Math.floor(Math.random() * state.tales.length)];
+  // Pick a random tale type from the eligible pool (excludes parents)
+  const tale = talePool[Math.floor(Math.random() * talePool.length)];
 
   // Sample motifs from chapters mapped to the tale's category
-  const pool = motifPoolForCategory(tale.category);
-  const picks = sampleWithoutReplacement(pool, count);
+  const motifPool = motifPoolForCategory(tale.category);
+  const picks = sampleWithoutReplacement(motifPool, count);
 
   return {
     id: randomId(),
