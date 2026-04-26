@@ -644,39 +644,70 @@ function renderTaleDetail(t) {
 /* ---------- draw generation ----------
  *
  * A "draw" is a plain object the renderer consumes regardless of its
- * source. When ATU data arrives, `generateDraw({ source: "atu" })`
- * fills in `tale_type` and tags the tale's motifs with role "core" —
- * the pipeline (rendering, permalinks, replacement) is unchanged.
+ * source. Right now every draw is built around a random ATU tale
+ * type with motifs sampled heuristically from chapters that fit the
+ * tale's category (no direct ATU-to-motif references exist in the
+ * open-source ATU index, so we use category->chapter mapping).
  *
  *   {
  *     id:        string,                       // permalink id
- *     source:    "random" | "atu",
- *     tale_type: null | { atu_id, title, summary },
- *     motifs:    [ { role: "core"|"extra", motif_id: string } ]
+ *     source:    "atu",
+ *     tale_type: { atu_id, title, category, subsection, notes, exemplars },
+ *     motifs:    [ { role: "extra", motif_id: string } ]
  *   }
  *
  * `role` is carried but not displayed. It becomes meaningful only
- * when a draw mixes tale-type motifs with additional ones.
+ * when/if a draw mixes core (tale-type-defined) motifs with extras.
  */
 
+// ATU category -> Thompson chapter letters that are thematically aligned.
+// When a draw picks an ATU type, motifs are sampled from these chapters.
+const ATU_TO_CHAPTERS = {
+  "Animal Tales": ["B", "K", "J"],
+  "Tales of Magic": ["D", "F", "G", "H", "E"],
+  "Religious Tales": ["V", "Q", "L"],
+  "Realistic Tales": ["P", "T", "N", "W"],
+  "Stupid Ogre": ["G", "J"],
+  "Anecdotes and Jokes": ["X", "J"],
+  "Formula Tales": ["Z"],
+};
+
+function chaptersForCategory(category) {
+  return ATU_TO_CHAPTERS[category] || [];
+}
+
+function motifPoolForCategory(category) {
+  const letters = chaptersForCategory(category);
+  if (!letters.length) return state.searchIndex;
+  const set = new Set(letters);
+  return state.searchIndex.filter((m) => set.has(m.c));
+}
+
 async function generateDraw(options = {}) {
-  const source = options.source || "random";
   const count = Math.max(1, Math.min(12, options.count || 5));
 
-  if (source === "atu") {
-    // Placeholder until ATU data lands:
-    //   1. pick a random ATU tale type
-    //   2. add its motifs as role="core"
-    //   3. top up with role="extra" motifs to reach `count`
-    throw new Error("ATU source not wired up yet");
+  if (!state.tales.length) {
+    throw new Error("ATU data not loaded yet");
   }
 
-  const pool = state.searchIndex;
+  // Pick a random tale type
+  const tale = state.tales[Math.floor(Math.random() * state.tales.length)];
+
+  // Sample motifs from chapters mapped to the tale's category
+  const pool = motifPoolForCategory(tale.category);
   const picks = sampleWithoutReplacement(pool, count);
+
   return {
     id: randomId(),
-    source: "random",
-    tale_type: null,
+    source: "atu",
+    tale_type: {
+      atu_id: tale.atu_id,
+      title: tale.title,
+      category: tale.category,
+      subsection: tale.subsection,
+      notes: tale.notes,
+      exemplars: tale.exemplars,
+    },
     motifs: picks.map((m) => ({ role: "extra", motif_id: m.i })),
   };
 }
@@ -719,11 +750,13 @@ async function renderDraw(draw) {
   const parts = [];
 
   if (draw.tale_type) {
+    const t = draw.tale_type;
     parts.push(`
       <div class="tale-type-card">
-        <div class="eyebrow">ATU ${escapeHTML(draw.tale_type.atu_id)}</div>
-        <h3>${escapeHTML(draw.tale_type.title || "")}</h3>
-        ${draw.tale_type.summary ? `<p>${escapeHTML(draw.tale_type.summary)}</p>` : ""}
+        <div class="eyebrow">ATU ${escapeHTML(t.atu_id)} &middot; ${escapeHTML(t.category || "")}</div>
+        <h3>${escapeHTML(t.title || "")}</h3>
+        ${t.notes ? `<p>${escapeHTML(t.notes)}</p>` : ""}
+        <a href="#" class="card-open-link" data-action="open-tale" data-tale-id="${escapeAttr(t.atu_id)}">Open in Browse &rsaquo;</a>
       </div>
     `);
   }
@@ -755,7 +788,14 @@ async function renderDraw(draw) {
     link.addEventListener("click", (e) => {
       e.stopPropagation();
       e.preventDefault();
-      openInBrowse(link.dataset.motifId);
+      openInBrowse(link.dataset.motifId, "motif");
+    });
+  }
+  for (const link of els.drawBody.querySelectorAll('[data-action="open-tale"]')) {
+    link.addEventListener("click", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      openInBrowse(link.dataset.taleId, "tale");
     });
   }
 }
@@ -823,11 +863,17 @@ function replaceCard(motifId) {
   if (!draw) return;
   const idx = draw.motifs.findIndex((e) => e.motif_id === motifId);
   if (idx < 0) return;
+
+  // Keep replacements within the same category-mapped chapter pool so
+  // the draw stays thematically coherent.
+  const pool = draw.tale_type
+    ? motifPoolForCategory(draw.tale_type.category)
+    : state.searchIndex;
   const existing = new Set(draw.motifs.map((e) => e.motif_id));
   let replacement;
   for (let i = 0; i < 50; i++) {
-    const cand = state.searchIndex[Math.floor(Math.random() * state.searchIndex.length)];
-    if (!existing.has(cand.i)) {
+    const cand = pool[Math.floor(Math.random() * pool.length)];
+    if (cand && !existing.has(cand.i)) {
       replacement = cand;
       break;
     }
@@ -839,14 +885,31 @@ function replaceCard(motifId) {
   updateHash();
 }
 
-function openInBrowse(motifId) {
+async function openInBrowse(id, type = "motif") {
   // Remember where we came from so we can offer a back pill
   if (state.currentDraw) {
     state.drawReturnHash = "tab=draw&draw=" + encodeDraw(state.currentDraw);
     els.backToDraw.hidden = false;
   }
   switchTab("browse");
-  showDetail(motifId);
+
+  // Auto-navigate the list pane so the detail has surrounding context
+  if (type === "tale") {
+    const t = state.taleById.get(id);
+    if (t && state.view.taleCategory !== t.category) {
+      await selectTaleCategory(t.category);
+    }
+    showDetail(id, null, "tale");
+  } else {
+    const m = await getMotifById(id);
+    if (m) {
+      const letter = (m.chapter || "").split(".")[0].trim();
+      if (letter && state.view.chapter !== letter) {
+        await selectChapter(letter);
+      }
+    }
+    showDetail(id, null, "motif");
+  }
 }
 
 function returnToDraw() {
@@ -866,9 +929,11 @@ async function copyDrawToClipboard() {
 
   const lines = [];
   if (draw.tale_type) {
-    lines.push(`ATU ${draw.tale_type.atu_id}: ${draw.tale_type.title}`);
-    if (draw.tale_type.summary) lines.push(draw.tale_type.summary);
+    const t = draw.tale_type;
+    lines.push(`ATU ${t.atu_id}: ${t.title}${t.category ? ` (${t.category})` : ""}`);
+    if (t.notes) lines.push(t.notes);
     lines.push("");
+    lines.push("Motifs:");
   }
   for (const entry of draw.motifs) {
     const m = state.detailCache.get(entry.motif_id);
@@ -909,27 +974,50 @@ function flashCopyConfirmed() {
 }
 
 /* ---------- draw permalink encoding ----------
- * Compact URL-safe form: "<source>:<id>:<motif_ids_comma_separated>"
- * Motifs with role "core" are prefixed with "*".
+ * Format: "<source>:<id>:<atu_id_or_blank>:<motif_ids_comma_separated>"
+ * The tale_type is recovered from state.taleById on decode.
+ * Legacy 3-part format (no atu_id slot) is still accepted.
  */
 
 function encodeDraw(draw) {
-  const ids = draw.motifs.map((e) => (e.role === "core" ? "*" : "") + e.motif_id);
-  return [draw.source, draw.id, ids.join(",")].join(":");
+  const taleId = draw.tale_type?.atu_id || "";
+  const ids = draw.motifs.map((e) => e.motif_id).join(",");
+  return [draw.source, draw.id, taleId, ids].join(":");
 }
 
 function decodeDraw(str) {
   const parts = str.split(":");
   if (parts.length < 3) return null;
-  const [source, id, idsStr] = parts;
+
+  let source, id, taleId, idsStr;
+  if (parts.length === 3) {
+    [source, id, idsStr] = parts;
+    taleId = "";
+  } else {
+    [source, id, taleId, idsStr] = parts;
+  }
+
+  let tale_type = null;
+  if (taleId) {
+    const t = state.taleById.get(taleId);
+    if (t) {
+      tale_type = {
+        atu_id: t.atu_id,
+        title: t.title,
+        category: t.category,
+        subsection: t.subsection,
+        notes: t.notes,
+        exemplars: t.exemplars,
+      };
+    }
+  }
+
   const motifs = idsStr
     .split(",")
     .filter(Boolean)
-    .map((tok) => {
-      if (tok.startsWith("*")) return { role: "core", motif_id: tok.slice(1) };
-      return { role: "extra", motif_id: tok };
-    });
-  return { id, source, tale_type: null, motifs };
+    .map((mid) => ({ role: "extra", motif_id: mid }));
+
+  return { id, source, tale_type, motifs };
 }
 
 /* ---------- utilities ---------- */
