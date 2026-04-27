@@ -44,6 +44,7 @@ const els = {
   drawId: document.getElementById("draw-id"),
   drawCount: document.getElementById("draw-count"),
   newDrawBtn: document.getElementById("new-draw-btn"),
+  randomDrawBtn: document.getElementById("random-draw-btn"),
   copyDrawBtn: document.getElementById("copy-draw-btn"),
   backToDraw: document.getElementById("back-to-draw"),
   tabs: document.querySelectorAll(".tab"),
@@ -115,7 +116,8 @@ async function init() {
 
   els.search.addEventListener("input", debounce(onSearch, 150));
   els.regionFilter.addEventListener("change", onRegionChange);
-  els.newDrawBtn.addEventListener("click", () => generateAndRenderDraw());
+  els.newDrawBtn.addEventListener("click", () => generateAndRenderDraw("atu"));
+  els.randomDrawBtn.addEventListener("click", () => generateAndRenderDraw("random"));
   els.copyDrawBtn.addEventListener("click", copyDrawToClipboard);
   els.backToDraw.addEventListener("click", returnToDraw);
   for (const tab of els.tabs) {
@@ -676,88 +678,139 @@ function renderTaleDetail(t) {
  * when/if a draw mixes core (tale-type-defined) motifs with extras.
  */
 
-// Per-ATU-category weighted preference for Thompson chapters.
-// Mapped chapters get the listed weight; unmapped chapters fall back
-// to BASE_WEIGHT, so they can still surface — the mapping biases
-// draws toward thematic chapters without restricting them entirely.
+// ---------- Propp-derived slot vocabulary ----------
 //
-// When sampling N motifs, each pick reduces its chapter's weight by
-// ANTI_CLUSTER_FACTOR. This yields cross-chapter variety even within
-// a single thematic category (no more "5 fool motifs in a row").
-const BASE_WEIGHT = 0.3;
-const ANTI_CLUSTER_FACTOR = 0.4;
+// Each motif card in an ATU draw fills one functional slot. Slots are
+// derived from Propp's narrative functions, restricted to those with
+// rich Thompson coverage, plus a few extra-Proppian slots (HUMOR,
+// TRAIT, etc.) that cover non-magic genres Propp didn't address.
+// Each chapter belongs to exactly one slot — no overlaps, so slot
+// complementarity (no slot repeats in a draw) automatically gives
+// chapter variety.
 
-const CHAPTER_WEIGHTS = {
-  "Animal Tales": { B: 4, K: 3, J: 2.5, X: 1.5, A: 1 },
-  "Tales of Magic": { D: 4, F: 3, G: 3, H: 3, E: 2.5, T: 2, Q: 1.5, A: 1 },
-  "Religious Tales": { V: 4, Q: 3, L: 2.5, M: 2, P: 2, A: 1.5 },
-  "Realistic Tales": { P: 3.5, T: 3, N: 3, W: 2.5, J: 2, K: 2, U: 1.5 },
-  "Stupid Ogre": { G: 4, J: 3, K: 3, X: 2, S: 1.5 },
-  "Anecdotes and Jokes": { X: 4, J: 3, K: 2.5, W: 2.5, T: 2, V: 2, P: 1.5 },
-  "Formula Tales": { Z: 4, B: 2, X: 1.5 },
+const SLOTS = {
+  TABU:      { label: "Tabu",       chapters: ["C"] },
+  VILLAIN:   { label: "Villain",    chapters: ["G", "S"] },
+  MAGIC:     { label: "Magic",      chapters: ["D", "F"] },
+  TEST:      { label: "Test",       chapters: ["H"] },
+  DECEPTION: { label: "Deception",  chapters: ["K"] },
+  REVERSAL:  { label: "Reversal",   chapters: ["L"] },
+  FATE:      { label: "Fate",       chapters: ["M", "N"] },
+  REWARD:    { label: "Reward",     chapters: ["Q"] },
+  CAPTIVE:   { label: "Captivity",  chapters: ["R"] },
+  UNION:     { label: "Union",      chapters: ["T"] },
+  RELIGION:  { label: "Sacred",     chapters: ["V"] },
+  ANIMAL:    { label: "Animal",     chapters: ["B"] },
+  FOOL:      { label: "Folly",      chapters: ["J"] },
+  HUMOR:     { label: "Humor",      chapters: ["X"] },
+  TRAIT:     { label: "Trait",      chapters: ["W"] },
+  SOCIETY:   { label: "Society",    chapters: ["P"] },
+  ORIGIN:    { label: "Origin",     chapters: ["A"] },
+  WISDOM:    { label: "Wisdom",     chapters: ["U"] },
+  FORMULA:   { label: "Formula",    chapters: ["Z"] },
+};
+
+// Per-ATU-category slot priority. Today this is the *default*
+// essential_slots list for every ATU in that category — when LLM
+// per-ATU tagging lands later, individual ATUs can override this.
+//
+// For an N-card draw, take the first N slots from the priority list.
+// If priority has fewer than N entries, fill remaining with random
+// other slots from the vocabulary.
+const CATEGORY_SLOT_PRIORITY = {
+  "Tales of Magic":      ["MAGIC", "VILLAIN", "TEST", "REWARD", "UNION", "TABU", "FATE", "REVERSAL", "RELIGION", "ORIGIN", "CAPTIVE"],
+  "Animal Tales":        ["ANIMAL", "DECEPTION", "FOOL", "REWARD", "TRAIT", "HUMOR", "REVERSAL"],
+  "Religious Tales":     ["RELIGION", "TABU", "REWARD", "TEST", "ORIGIN", "FATE", "WISDOM", "UNION"],
+  "Realistic Tales":     ["FATE", "TRAIT", "TEST", "UNION", "DECEPTION", "REWARD", "SOCIETY", "WISDOM", "CAPTIVE"],
+  "Stupid Ogre":         ["VILLAIN", "FOOL", "DECEPTION", "TEST", "REWARD"],
+  "Anecdotes and Jokes": ["FOOL", "DECEPTION", "HUMOR", "TRAIT", "SOCIETY", "RELIGION", "UNION"],
+  "Formula Tales":       ["FORMULA", "HUMOR", "ANIMAL", "FOOL"],
 };
 
 /**
- * Pick `count` motifs for a draw, weighted by category and avoiding
- * chapter clustering. `existing` is an array of lean motif entries
- * (with .c chapter letter) already in the draw — their chapters
- * pre-load the anti-cluster multiplier so replacements respect what's
- * already on the table.
+ * Determine the slot lineup for an ATU draw.
+ * Today: derived from category priority. Future: the ATU's own
+ * `essential_slots` field (from regex / LLM tagging) overrides.
  */
-function pickMotifsForDraw(category, count, existing = []) {
-  const weights = CHAPTER_WEIGHTS[category] || {};
-  const allChapters = [...state.motifsByChapter.keys()];
-  const used = new Set(existing.map((m) => m.i));
-  const mult = new Map();
-  for (const m of existing) {
-    mult.set(m.c, (mult.get(m.c) ?? 1) * ANTI_CLUSTER_FACTOR);
+function slotLineupForCategory(category, count) {
+  const priority = CATEGORY_SLOT_PRIORITY[category] || [];
+  const lineup = priority.slice(0, count);
+  // Fill any remaining slots with random other slots from the vocabulary
+  if (lineup.length < count) {
+    const remaining = Object.keys(SLOTS).filter((s) => !lineup.includes(s));
+    while (lineup.length < count && remaining.length) {
+      const idx = Math.floor(Math.random() * remaining.length);
+      lineup.push(remaining[idx]);
+      remaining.splice(idx, 1);
+    }
   }
+  return lineup;
+}
+
+/** Pick a random unused motif from one of a slot's mapped chapters. */
+function pickMotifForSlot(slotName, excludeIds) {
+  const slot = SLOTS[slotName];
+  if (!slot) return null;
+  // Pool all motifs across the slot's chapters, then pick one not in excludeIds
+  const pool = [];
+  for (const ch of slot.chapters) {
+    const list = state.motifsByChapter.get(ch);
+    if (list) pool.push(...list);
+  }
+  if (!pool.length) return null;
+  for (let tries = 0; tries < 80; tries++) {
+    const m = pool[Math.floor(Math.random() * pool.length)];
+    if (!excludeIds.has(m.i)) return m;
+  }
+  return pool.find((m) => !excludeIds.has(m.i)) || null;
+}
+
+/**
+ * Pick `count` motifs for an ATU draw using Propp slots.
+ * `existing` is an array of {slot, motif_id} entries already in the
+ * draw — their slots are excluded from the lineup so we never repeat
+ * a slot, and their motif_ids are excluded from the candidate pool.
+ */
+function pickMotifsForDrawBySlot(category, count, existing = []) {
+  const usedSlots = new Set(existing.map((e) => e.slot).filter(Boolean));
+  const usedIds = new Set(existing.map((e) => e.motif_id));
+
+  // Compute total lineup needed (existing + new), drop already-used slots
+  const totalCount = existing.length + count;
+  const fullLineup = slotLineupForCategory(category, totalCount);
+  const newSlots = fullLineup.filter((s) => !usedSlots.has(s)).slice(0, count);
 
   const picks = [];
-  for (let i = 0; i < count; i++) {
-    const pick = pickOneWeightedMotif(allChapters, weights, mult, used);
-    if (!pick) break;
-    picks.push(pick);
-    used.add(pick.i);
-    mult.set(pick.c, (mult.get(pick.c) ?? 1) * ANTI_CLUSTER_FACTOR);
+  for (const slot of newSlots) {
+    const motif = pickMotifForSlot(slot, usedIds);
+    if (motif) {
+      picks.push({ slot, motif });
+      usedIds.add(motif.i);
+    }
+  }
+  // Shouldn't normally trigger, but if a slot was empty for some reason,
+  // top up with any random unused motif (no slot label)
+  while (picks.length < count) {
+    const m = state.searchIndex[Math.floor(Math.random() * state.searchIndex.length)];
+    if (!usedIds.has(m.i)) {
+      picks.push({ slot: null, motif: m });
+      usedIds.add(m.i);
+    }
   }
   return picks;
 }
 
-function pickOneWeightedMotif(allChapters, weights, mult, used) {
-  // Build the chapter-level weight distribution, skipping exhausted ones
-  const distribution = [];
-  let total = 0;
-  for (const ch of allChapters) {
-    const baseW = weights[ch] ?? BASE_WEIGHT;
-    const m = mult.get(ch) ?? 1;
-    const w = baseW * m;
-    if (w <= 0) continue;
-    const motifs = state.motifsByChapter.get(ch);
-    // Cheap exhaustion check: only fully bail if every motif is used,
-    // which is virtually impossible at our sizes
-    if (motifs.length <= used.size && motifs.every((mm) => used.has(mm.i))) continue;
-    distribution.push({ ch, w });
-    total += w;
+/** Pure uniform random — used by the "Random" escape hatch button. */
+function pickRandomMotifs(count, excludeIds = new Set()) {
+  const used = new Set(excludeIds);
+  const picks = [];
+  while (picks.length < count) {
+    const m = state.searchIndex[Math.floor(Math.random() * state.searchIndex.length)];
+    if (used.has(m.i)) continue;
+    picks.push({ slot: null, motif: m });
+    used.add(m.i);
   }
-  if (total <= 0) return null;
-
-  // Weighted random chapter
-  let r = Math.random() * total;
-  let chosenCh = distribution[distribution.length - 1].ch;
-  for (const { ch, w } of distribution) {
-    r -= w;
-    if (r <= 0) { chosenCh = ch; break; }
-  }
-
-  // Random unused motif within that chapter (sampling with retry)
-  const motifs = state.motifsByChapter.get(chosenCh);
-  for (let tries = 0; tries < 50; tries++) {
-    const m = motifs[Math.floor(Math.random() * motifs.length)];
-    if (!used.has(m.i)) return m;
-  }
-  // Fallback: linear scan if random sampling kept hitting used entries
-  return motifs.find((m) => !used.has(m.i)) || null;
+  return picks;
 }
 
 function isParentType(t) {
@@ -768,17 +821,29 @@ function isParentType(t) {
 
 async function generateDraw(options = {}) {
   const count = Math.max(1, Math.min(12, options.count || 5));
+  const source = options.source || "atu";
 
+  if (source === "random") {
+    const picks = pickRandomMotifs(count);
+    return {
+      id: randomId(),
+      source: "random",
+      tale_type: null,
+      motifs: picks.map((p) => ({
+        role: "extra",
+        motif_id: p.motif.i,
+        slot: null,
+      })),
+    };
+  }
+
+  // ATU mode: pick a tale type, then fill Propp slots
   const talePool = state.drawPool || [];
   if (!talePool.length) {
     throw new Error("ATU data not loaded yet");
   }
-
-  // Pick a random tale type from the eligible pool (excludes parents)
   const tale = talePool[Math.floor(Math.random() * talePool.length)];
-
-  // Sample motifs weighted by category, with anti-clustering
-  const picks = pickMotifsForDraw(tale.category, count);
+  const picks = pickMotifsForDrawBySlot(tale.category, count);
 
   return {
     id: randomId(),
@@ -791,7 +856,11 @@ async function generateDraw(options = {}) {
       notes: tale.notes,
       exemplars: tale.exemplars,
     },
-    motifs: picks.map((m) => ({ role: "extra", motif_id: m.i })),
+    motifs: picks.map((p) => ({
+      role: "extra",
+      motif_id: p.motif.i,
+      slot: p.slot,
+    })),
   };
 }
 
@@ -799,9 +868,9 @@ function randomId() {
   return Math.random().toString(36).slice(2, 8);
 }
 
-async function generateAndRenderDraw() {
+async function generateAndRenderDraw(source = "atu") {
   const count = parseInt(els.drawCount.value, 10) || 5;
-  const draw = await generateDraw({ source: "random", count });
+  const draw = await generateDraw({ source, count });
   state.currentDraw = draw;
   renderDraw(draw);
   updateHash();
@@ -813,6 +882,7 @@ async function renderDraw(draw) {
   const resolved = await Promise.all(
     draw.motifs.map(async (entry) => ({
       role: entry.role,
+      slot: entry.slot,
       motif: await getMotifById(entry.motif_id),
     })),
   );
@@ -832,9 +902,9 @@ async function renderDraw(draw) {
   }
 
   parts.push('<div class="draw-motifs">');
-  for (const { motif } of resolved) {
+  for (const { motif, slot } of resolved) {
     if (!motif) continue;
-    parts.push(renderMotifCard(motif));
+    parts.push(renderMotifCard(motif, slot));
   }
   parts.push("</div>");
 
@@ -870,16 +940,21 @@ async function renderDraw(draw) {
   }
 }
 
-function renderMotifCard(m) {
+function renderMotifCard(m, slot) {
   const chapterShort = (m.chapter || "").replace(/\.$/, "");
   const sectionShort = (m.section || "").replace(/\.$/, "");
   const context = [chapterShort, sectionShort].filter(Boolean).join(" · ");
+  const slotLabel = slot && SLOTS[slot] ? SLOTS[slot].label : null;
+  const rerollTitle = slot
+    ? `Replace this ${slotLabel.toLowerCase()} motif`
+    : "Replace this card";
   return `
     <article class="motif-card" data-motif-id="${escapeAttr(m.motif_id)}">
       <div class="card-head">
         <span class="id">${escapeHTML(m.motif_id || "—")}</span>
-        <button class="reroll-btn" data-action="reroll" data-motif-id="${escapeAttr(m.motif_id)}" title="Replace this card">&#x21bb;</button>
+        <button class="reroll-btn" data-action="reroll" data-motif-id="${escapeAttr(m.motif_id)}" title="${escapeAttr(rerollTitle)}">&#x21bb;</button>
       </div>
+      ${slotLabel ? `<span class="slot-label">${escapeHTML(slotLabel)}</span>` : ""}
       <h4>${escapeHTML(m.name || "—")}</h4>
       <div class="card-context">${escapeHTML(context)}</div>
       ${renderCardExpanded(m)}
@@ -934,19 +1009,27 @@ function replaceCard(motifId) {
   const idx = draw.motifs.findIndex((e) => e.motif_id === motifId);
   if (idx < 0) return;
 
-  // Anti-cluster against the OTHER motifs currently in the draw
-  const others = draw.motifs
-    .filter((_, i) => i !== idx)
-    .map((e) => state.motifSearchById.get(e.motif_id))
-    .filter(Boolean);
+  const entry = draw.motifs[idx];
+  const usedIds = new Set(draw.motifs.map((e) => e.motif_id));
 
-  const [replacement] = pickMotifsForDraw(
-    draw.tale_type?.category || null,
-    1,
-    others,
-  );
+  let replacement = null;
+  if (entry.slot) {
+    // Slot-aware reroll: stay in the same Propp slot
+    replacement = pickMotifForSlot(entry.slot, usedIds);
+  } else {
+    // Random mode (or slotless fallback): any unused motif
+    for (let tries = 0; tries < 80; tries++) {
+      const m = state.searchIndex[Math.floor(Math.random() * state.searchIndex.length)];
+      if (!usedIds.has(m.i)) { replacement = m; break; }
+    }
+  }
   if (!replacement) return;
-  draw.motifs[idx] = { role: draw.motifs[idx].role, motif_id: replacement.i };
+
+  draw.motifs[idx] = {
+    role: entry.role,
+    motif_id: replacement.i,
+    slot: entry.slot,
+  };
   draw.id = randomId();
   renderDraw(draw);
   updateHash();
@@ -1041,27 +1124,30 @@ function flashCopyConfirmed() {
 }
 
 /* ---------- draw permalink encoding ----------
- * Format: "<source>:<id>:<atu_id_or_blank>:<motif_ids_comma_separated>"
+ * Format: "<source>:<id>:<atu_id_or_blank>:<entries>"
+ * Each entry is either "MOTIF_ID" (no slot) or "SLOT=MOTIF_ID".
  * The tale_type is recovered from state.taleById on decode.
- * Legacy 3-part format (no atu_id slot) is still accepted.
+ * Legacy 3-part / pre-slot 4-part formats are still accepted.
  */
 
 function encodeDraw(draw) {
   const taleId = draw.tale_type?.atu_id || "";
-  const ids = draw.motifs.map((e) => e.motif_id).join(",");
-  return [draw.source, draw.id, taleId, ids].join(":");
+  const entries = draw.motifs
+    .map((e) => (e.slot ? `${e.slot}=${e.motif_id}` : e.motif_id))
+    .join(",");
+  return [draw.source, draw.id, taleId, entries].join(":");
 }
 
 function decodeDraw(str) {
   const parts = str.split(":");
   if (parts.length < 3) return null;
 
-  let source, id, taleId, idsStr;
+  let source, id, taleId, entriesStr;
   if (parts.length === 3) {
-    [source, id, idsStr] = parts;
+    [source, id, entriesStr] = parts;
     taleId = "";
   } else {
-    [source, id, taleId, idsStr] = parts;
+    [source, id, taleId, entriesStr] = parts;
   }
 
   let tale_type = null;
@@ -1079,10 +1165,16 @@ function decodeDraw(str) {
     }
   }
 
-  const motifs = idsStr
+  const motifs = entriesStr
     .split(",")
     .filter(Boolean)
-    .map((mid) => ({ role: "extra", motif_id: mid }));
+    .map((tok) => {
+      const eq = tok.indexOf("=");
+      if (eq > 0) {
+        return { role: "extra", slot: tok.slice(0, eq), motif_id: tok.slice(eq + 1) };
+      }
+      return { role: "extra", motif_id: tok, slot: null };
+    });
 
   return { id, source, tale_type, motifs };
 }

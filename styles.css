@@ -495,6 +495,23 @@ select {
   background: #70461f;
 }
 
+.quiet-btn {
+  padding: 8px 14px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.quiet-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .icon-btn-bare {
   padding: 6px;
   color: var(--text-muted);
@@ -647,6 +664,17 @@ select {
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+.motif-card .slot-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  margin-bottom: -4px;
+  margin-top: 2px;
 }
 
 .reroll-btn {
